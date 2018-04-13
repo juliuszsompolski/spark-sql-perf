@@ -17,7 +17,7 @@
 package com.databricks.spark.sql.perf.tpch
 import scala.sys.process._
 
-import com.databricks.spark.sql.perf.{Benchmark, BlockingLineStream, DataGenerator, Table, Tables}
+import com.databricks.spark.sql.perf.{Benchmark, BlockingLineStream, DataGenerator, Table, TPCTables}
 import com.databricks.spark.sql.perf.ExecutionMode.CollectResults
 import org.apache.commons.io.IOUtils
 
@@ -70,12 +70,12 @@ class TPCHTables(
     useDoubleForDecimal: Boolean = false,
     useStringForDate: Boolean = false,
     generatorParams: Seq[String] = Nil)
-    extends Tables(sqlContext, scaleFactor, useDoubleForDecimal, useStringForDate) {
+    extends TPCTables(sqlContext, scaleFactor, useDoubleForDecimal, useStringForDate) {
   import sqlContext.implicits._
 
   val dataGenerator = new DBGEN(dbgenDir, generatorParams)
 
-  val tables = Seq(
+  override val tables = Seq(
     Table("part",
       partitionColumns = Nil,
       'p_partkey.long,

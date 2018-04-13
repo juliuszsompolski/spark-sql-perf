@@ -19,7 +19,7 @@ package com.databricks.spark.sql.perf.tpcds
 import scala.sys.process._
 
 import com.databricks.spark.sql.perf
-import com.databricks.spark.sql.perf.{BlockingLineStream, DataGenerator, Table, Tables}
+import com.databricks.spark.sql.perf.{BlockingLineStream, DataGenerator, Table, TPCTables}
 
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.SQLContext
@@ -60,11 +60,11 @@ class TPCDSTables(
   scaleFactor: String,
   useDoubleForDecimal: Boolean = false,
   useStringForDate: Boolean = false)
-  extends Tables(sqlContext, scaleFactor, useDoubleForDecimal, useStringForDate) {
+  extends TPCTables(sqlContext, scaleFactor, useDoubleForDecimal, useStringForDate) {
   import sqlContext.implicits._
 
   val dataGenerator = new DSDGEN(dsdgenDir)
-  val tables = Seq(
+  override val tables = Seq(
     Table("catalog_sales",
       partitionColumns = "cs_sold_date_sk" :: Nil,
       'cs_sold_date_sk          .int,

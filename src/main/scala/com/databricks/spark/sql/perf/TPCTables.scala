@@ -93,20 +93,117 @@ trait DataGenerator extends Serializable {
     scaleFactor: String): RDD[String]
 }
 
+/** Abstract class with common methods to work on benchmark table DDLs. */
+abstract class TableDDL(
+    sqlContext: SQLContext,
+    val name: String, partitionColumns: Seq[String], fields: Seq[StructField]) {
 
-abstract class Tables(sqlContext: SQLContext, scaleFactor: String,
+  private val log = LoggerFactory.getLogger(getClass)
+
+  val schema = StructType(fields)
+
+  def createExternalTable(location: String, format: String, databaseName: String,
+    overwrite: Boolean, discoverPartitions: Boolean = true): Unit = {
+
+    val qualifiedTableName = databaseName + "." + name
+    val tableExists = sqlContext.tableNames(databaseName).contains(name)
+    if (overwrite) {
+      sqlContext.sql(s"DROP TABLE IF EXISTS $databaseName.$name")
+    }
+    if (!tableExists || overwrite) {
+      println(s"Creating external table $name in database $databaseName using data stored in $location.")
+      log.info(s"Creating external table $name in database $databaseName using data stored in $location.")
+      sqlContext.createExternalTable(qualifiedTableName, location, format)
+    }
+    if (partitionColumns.nonEmpty && discoverPartitions) {
+      println(s"Discovering partitions for table $name.")
+      log.info(s"Discovering partitions for table $name.")
+      sqlContext.sql(s"ALTER TABLE $databaseName.$name RECOVER PARTITIONS")
+    }
+  }
+
+  def createTemporaryTable(location: String, format: String): Unit = {
+    println(s"Creating temporary table $name using data stored in $location.")
+    log.info(s"Creating temporary table $name using data stored in $location.")
+    sqlContext.read.format(format).load(location).registerTempTable(name)
+  }
+
+  def analyzeTable(databaseName: String, analyzeColumns: Boolean = false): Unit = {
+    println(s"Analyzing table $name.")
+    log.info(s"Analyzing table $name.")
+    sqlContext.sql(s"ANALYZE TABLE $databaseName.$name COMPUTE STATISTICS")
+    if (analyzeColumns) {
+      val allColumns = fields.map(_.name).mkString(", ")
+      println(s"Analyzing table $name columns $allColumns.")
+      log.info(s"Analyzing table $name columns $allColumns.")
+      sqlContext.sql(s"ANALYZE TABLE $databaseName.$name COMPUTE STATISTICS FOR COLUMNS $allColumns")
+    }
+  }
+}
+
+/** Abstract class with common methods to work on benchmark tables DDLs. */
+abstract class TablesDDL(sqlContext: SQLContext) {
+  private val log = LoggerFactory.getLogger(getClass)
+
+  def tables: Seq[TableDDL]
+
+  def createExternalTables(location: String, format: String, databaseName: String,
+    overwrite: Boolean, discoverPartitions: Boolean, tableFilter: String = ""): Unit = {
+
+    val filtered = if (tableFilter.isEmpty) {
+      tables
+    } else {
+      tables.filter(_.name == tableFilter)
+    }
+
+    sqlContext.sql(s"CREATE DATABASE IF NOT EXISTS $databaseName")
+    filtered.foreach { table =>
+      val tableLocation = s"$location/${table.name}"
+      table.createExternalTable(tableLocation, format, databaseName, overwrite, discoverPartitions)
+    }
+    sqlContext.sql(s"USE $databaseName")
+    println(s"The current database has been set to $databaseName.")
+    log.info(s"The current database has been set to $databaseName.")
+  }
+
+  def createTemporaryTables(location: String, format: String, tableFilter: String = ""): Unit = {
+    val filtered = if (tableFilter.isEmpty) {
+      tables
+    } else {
+      tables.filter(_.name == tableFilter)
+    }
+    filtered.foreach { table =>
+      val tableLocation = s"$location/${table.name}"
+      table.createTemporaryTable(tableLocation, format)
+    }
+  }
+
+  def analyzeTables(databaseName: String, analyzeColumns: Boolean = false, tableFilter: String = ""): Unit = {
+    val filtered = if (tableFilter.isEmpty) {
+      tables
+    } else {
+      tables.filter(_.name == tableFilter)
+    }
+    filtered.foreach { table =>
+      table.analyzeTable(databaseName, analyzeColumns)
+    }
+  }
+}
+
+/** Abstract class with common methods for TPC (-H, -DS) benchmark tables. */
+abstract class TPCTables(sqlContext: SQLContext, scaleFactor: String,
     useDoubleForDecimal: Boolean = false, useStringForDate: Boolean = false)
-    extends Serializable {
+    extends TablesDDL(sqlContext) with Serializable {
 
   def dataGenerator: DataGenerator
-  def tables: Seq[Table]
+  override def tables: Seq[Table]
 
   private val log = LoggerFactory.getLogger(getClass)
 
   def sparkContext = sqlContext.sparkContext
 
-  case class Table(name: String, partitionColumns: Seq[String], fields: StructField*) {
-    val schema = StructType(fields)
+  case class Table(override val name: String, partitionColumns: Seq[String], fields: StructField*)
+    extends TableDDL(sqlContext, name, partitionColumns, fields) {
 
     def nonPartitioned: Table = {
       Table(name, Nil, fields : _*)
@@ -227,44 +324,6 @@ abstract class Tables(sqlContext: SQLContext, scaleFactor: String,
       writer.save(location)
       sqlContext.dropTempTable(tempTableName)
     }
-
-    def createExternalTable(location: String, format: String, databaseName: String,
-      overwrite: Boolean, discoverPartitions: Boolean = true): Unit = {
-
-      val qualifiedTableName = databaseName + "." + name
-      val tableExists = sqlContext.tableNames(databaseName).contains(name)
-      if (overwrite) {
-        sqlContext.sql(s"DROP TABLE IF EXISTS $databaseName.$name")
-      }
-      if (!tableExists || overwrite) {
-        println(s"Creating external table $name in database $databaseName using data stored in $location.")
-        log.info(s"Creating external table $name in database $databaseName using data stored in $location.")
-        sqlContext.createExternalTable(qualifiedTableName, location, format)
-      }
-      if (partitionColumns.nonEmpty && discoverPartitions) {
-        println(s"Discovering partitions for table $name.")
-        log.info(s"Discovering partitions for table $name.")
-        sqlContext.sql(s"ALTER TABLE $databaseName.$name RECOVER PARTITIONS")
-      }
-    }
-
-    def createTemporaryTable(location: String, format: String): Unit = {
-      println(s"Creating temporary table $name using data stored in $location.")
-      log.info(s"Creating temporary table $name using data stored in $location.")
-      sqlContext.read.format(format).load(location).registerTempTable(name)
-    }
-
-    def analyzeTable(databaseName: String, analyzeColumns: Boolean = false): Unit = {
-      println(s"Analyzing table $name.")
-      log.info(s"Analyzing table $name.")
-      sqlContext.sql(s"ANALYZE TABLE $databaseName.$name COMPUTE STATISTICS")
-      if (analyzeColumns) {
-        val allColumns = fields.map(_.name).mkString(", ")
-        println(s"Analyzing table $name columns $allColumns.")
-        log.info(s"Analyzing table $name columns $allColumns.")
-        sqlContext.sql(s"ANALYZE TABLE $databaseName.$name COMPUTE STATISTICS FOR COLUMNS $allColumns")
-      }
-    }
   }
 
   def genData(
@@ -295,48 +354,4 @@ abstract class Tables(sqlContext: SQLContext, scaleFactor: String,
         filterOutNullPartitionValues, numPartitions)
     }
   }
-
-  def createExternalTables(location: String, format: String, databaseName: String,
-      overwrite: Boolean, discoverPartitions: Boolean, tableFilter: String = ""): Unit = {
-
-    val filtered = if (tableFilter.isEmpty) {
-      tables
-    } else {
-      tables.filter(_.name == tableFilter)
-    }
-
-    sqlContext.sql(s"CREATE DATABASE IF NOT EXISTS $databaseName")
-    filtered.foreach { table =>
-      val tableLocation = s"$location/${table.name}"
-      table.createExternalTable(tableLocation, format, databaseName, overwrite, discoverPartitions)
-    }
-    sqlContext.sql(s"USE $databaseName")
-    println(s"The current database has been set to $databaseName.")
-    log.info(s"The current database has been set to $databaseName.")
-  }
-
-  def createTemporaryTables(location: String, format: String, tableFilter: String = ""): Unit = {
-    val filtered = if (tableFilter.isEmpty) {
-      tables
-    } else {
-      tables.filter(_.name == tableFilter)
-    }
-    filtered.foreach { table =>
-      val tableLocation = s"$location/${table.name}"
-      table.createTemporaryTable(tableLocation, format)
-    }
-  }
-
-  def analyzeTables(databaseName: String, analyzeColumns: Boolean = false, tableFilter: String = ""): Unit = {
-    val filtered = if (tableFilter.isEmpty) {
-      tables
-    } else {
-      tables.filter(_.name == tableFilter)
-    }
-    filtered.foreach { table =>
-      table.analyzeTable(databaseName, analyzeColumns)
-    }
-  }
-
-
 }
